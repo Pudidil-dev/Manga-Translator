@@ -1,8 +1,10 @@
 from flask import Flask, render_template, request, redirect
+from flask_cors import CORS
 from detect_bubbles import detect_bubbles
 from process_bubble import process_bubble
 from add_text import add_text
 from services import Services
+from api_extension import extension_api
 from PIL import Image
 import numpy as np
 import base64
@@ -16,6 +18,15 @@ logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
 app.config["SECRET_KEY"] = os.environ.get("SECRET_KEY", "secret_key")
+
+# Enable CORS for extension API
+CORS(app, resources={
+    r"/health": {"origins": "*"},
+    r"/v1/*": {"origins": "*"}
+})
+
+# Register extension API blueprint
+app.register_blueprint(extension_api)
 
 MODEL_PATH = "model/model.pt"
 

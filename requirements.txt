@@ -27,6 +27,7 @@ python-dotenv>=1.0.1
 
 # Web Framework
 Flask>=2.2.5
+flask-cors>=4.0.0
 Werkzeug>=3.0.1
 gunicorn>=21.2.0
 gradio>=4.0.0

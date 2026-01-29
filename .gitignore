@@ -1,3 +1,31 @@
+# Python
 .venv/
 __pycache__/
 *.pyc
+*.pyo
+*.egg-info/
+.eggs/
+
+# Environment
+.env
+.env.local
+
+# IDE
+.vscode/
+.idea/
+
+# Extension - npm cache
+extension/node_modules/
+extension/.vite/
+
+# Optional: uncomment to exclude built extension
+# extension/dist/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Model cache (large files)
+*.onnx
+*.pt
+!model/model.pt
