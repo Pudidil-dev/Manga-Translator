@@ -39,10 +39,12 @@ LANGUAGE_NAMES = {
 # Based on professional localization guidelines (Netflix, Totus, Unbabel)
 STYLE_HINTS = {
     "id": (
-        "Use natural Indonesian that sounds conversational and fits manga bubbles.\n"
-        "Match the scene register: aku/kamu for casual, saya/Anda for formal.\n"
-        "Avoid stiff or overly formal phrasing and avoid text abbreviations (e.g., yg, gak, dll).\n"
-        "Keep proper names as-is. Capitalize 'Anda' when used.\n"
+        "Use natural, casual Indonesian that sounds like everyday conversation.\n"
+        "IMPORTANT: Use casual pronouns by default: aku for 'I', kamu/kau for 'you'.\n"
+        "DO NOT use formal 'Anda' or 'saya' unless the scene is explicitly formal (e.g., business meeting, talking to elders).\n"
+        "Most manga conversations are between friends/peers, so keep it casual and friendly.\n"
+        "Avoid stiff or robotic phrasing. Avoid text abbreviations (yg, gak, dll).\n"
+        "Keep proper names as-is.\n"
     ),
     "en": (
         "Use standard American English.\n"
