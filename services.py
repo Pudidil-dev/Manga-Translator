@@ -1,7 +1,7 @@
 """
 Singleton services for optimized model loading.
 Models are loaded once and reused across all requests.
-Auto-detects CUDA GPU for acceleration.
+Auto-detects GPU: NVIDIA CUDA or Intel GPU (via OpenVINO).
 """
 
 import os
@@ -12,14 +12,36 @@ import torch
 
 logger = logging.getLogger(__name__)
 
-# Auto-detect GPU
-USE_GPU = torch.cuda.is_available()
-GPU_NAME = torch.cuda.get_device_name(0) if USE_GPU else None
+# Auto-detect GPU type
+USE_CUDA = torch.cuda.is_available()
+CUDA_NAME = torch.cuda.get_device_name(0) if USE_CUDA else None
 
-if USE_GPU:
-    logger.info(f"CUDA GPU detected: {GPU_NAME}")
+# Detect Intel GPU via OpenVINO
+USE_INTEL_GPU = False
+INTEL_GPU_NAME = None
+try:
+    from openvino import Core
+    core = Core()
+    available_devices = core.available_devices
+    if "GPU" in available_devices:
+        USE_INTEL_GPU = True
+        # Get Intel GPU name
+        try:
+            INTEL_GPU_NAME = core.get_property("GPU", "FULL_DEVICE_NAME")
+        except:
+            INTEL_GPU_NAME = "Intel GPU"
+        logger.info(f"Intel GPU detected via OpenVINO: {INTEL_GPU_NAME}")
+except ImportError:
+    pass
+except Exception as e:
+    logger.debug(f"OpenVINO GPU detection failed: {e}")
+
+if USE_CUDA:
+    logger.info(f"NVIDIA CUDA GPU detected: {CUDA_NAME}")
+elif USE_INTEL_GPU:
+    logger.info(f"Using Intel GPU: {INTEL_GPU_NAME}")
 else:
-    logger.info("No CUDA GPU, using CPU optimization")
+    logger.info("No GPU detected, using CPU optimization")
     # CPU Optimization settings (only when no GPU)
     os.environ.setdefault("OMP_NUM_THREADS", "8")
     os.environ.setdefault("MKL_NUM_THREADS", "8")
@@ -55,31 +77,41 @@ class Services:
     def get_yolo(cls):
         """
         Get YOLO model instance (singleton).
-        Priority: CUDA GPU > OpenVINO INT8 > OpenVINO FP32 > PyTorch CPU.
+        Priority: CUDA GPU > Intel GPU (OpenVINO) > OpenVINO CPU > PyTorch CPU.
         """
         if cls._yolo is None:
             with cls._yolo_lock:
                 if cls._yolo is None:
                     from ultralytics import YOLO
 
-                    # Priority: CUDA > OpenVINO INT8 > FP32 > PyTorch
-                    if USE_GPU:
-                        # Use PyTorch with CUDA
-                        logger.info(f"Loading YOLO with CUDA GPU ({GPU_NAME})")
+                    # Priority: CUDA > Intel GPU > OpenVINO CPU > PyTorch
+                    if USE_CUDA:
+                        # Use PyTorch with NVIDIA CUDA
+                        logger.info(f"Loading YOLO with NVIDIA CUDA ({CUDA_NAME})")
                         cls._yolo = YOLO(cls.YOLO_MODEL)
                         cls._yolo.to('cuda')
                         cls._yolo_format = "pytorch_cuda"
-                    elif os.path.exists(cls.YOLO_OPENVINO_INT8):
-                        logger.info("Loading YOLO with OpenVINO INT8 (fastest CPU)")
+                    elif USE_INTEL_GPU and os.path.exists(cls.YOLO_OPENVINO_INT8):
+                        # Use OpenVINO with Intel GPU
+                        logger.info(f"Loading YOLO with Intel GPU ({INTEL_GPU_NAME})")
                         cls._yolo = YOLO(cls.YOLO_OPENVINO_INT8)
-                        cls._yolo_format = "openvino_int8"
-                    elif os.path.exists(cls.YOLO_OPENVINO_FP32):
-                        logger.info("Loading YOLO with OpenVINO FP32")
+                        # Note: OpenVINO auto-selects GPU when available
+                        cls._yolo_format = "openvino_intel_gpu"
+                    elif USE_INTEL_GPU and os.path.exists(cls.YOLO_OPENVINO_FP32):
+                        logger.info(f"Loading YOLO with Intel GPU FP32 ({INTEL_GPU_NAME})")
                         cls._yolo = YOLO(cls.YOLO_OPENVINO_FP32)
-                        cls._yolo_format = "openvino_fp32"
+                        cls._yolo_format = "openvino_intel_gpu_fp32"
+                    elif os.path.exists(cls.YOLO_OPENVINO_INT8):
+                        logger.info("Loading YOLO with OpenVINO INT8 (CPU)")
+                        cls._yolo = YOLO(cls.YOLO_OPENVINO_INT8)
+                        cls._yolo_format = "openvino_int8_cpu"
+                    elif os.path.exists(cls.YOLO_OPENVINO_FP32):
+                        logger.info("Loading YOLO with OpenVINO FP32 (CPU)")
+                        cls._yolo = YOLO(cls.YOLO_OPENVINO_FP32)
+                        cls._yolo_format = "openvino_fp32_cpu"
                     else:
                         logger.info("Loading YOLO PyTorch model (CPU)")
-                        logger.info("  Tip: Run 'python export_openvino.py --int8' for 2-3x speedup")
+                        logger.info("  Tip: Run 'python export_openvino.py --int8' for speedup")
                         cls._yolo = YOLO(cls.YOLO_MODEL)
                         cls._yolo_format = "pytorch_cpu"
 

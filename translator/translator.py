@@ -35,6 +35,86 @@ LANGUAGE_NAMES = {
     "tr": "Turkish",
 }
 
+# Language-specific style hints for natural, localized translations
+# Based on professional localization guidelines (Netflix, Totus, Unbabel)
+STYLE_HINTS = {
+    "id": (
+        "Use natural Indonesian that sounds conversational and fits manga bubbles.\n"
+        "Match the scene register: aku/kamu for casual, saya/Anda for formal.\n"
+        "Avoid stiff or overly formal phrasing and avoid text abbreviations (e.g., yg, gak, dll).\n"
+        "Keep proper names as-is. Capitalize 'Anda' when used.\n"
+    ),
+    "en": (
+        "Use standard American English.\n"
+        "Avoid regional dialects and internet abbreviations (e.g., LOL, WTF, lol).\n"
+        "Keep punctuation consistent and make dialogue concise and natural.\n"
+        "Sound effects should be single words (e.g., 'CRASH', 'BANG').\n"
+    ),
+    "es": (
+        "Use Español neutro; avoid strong regionalisms unless context demands it.\n"
+        "Prefer natural word order over literal translation. Keep it concise.\n"
+        "Use inverted punctuation (¿ ¡) correctly.\n"
+    ),
+    "fr": (
+        "Follow French punctuation spacing: space before ? ! : ; characters.\n"
+        "Avoid semicolons in dialogue. Keep sentences natural and concise for bubbles.\n"
+        "Use appropriate register (tu/vous) based on character relationships.\n"
+    ),
+    "de": (
+        "Use standard German (Hochdeutsch).\n"
+        "Keep compound words readable. Use appropriate register (du/Sie).\n"
+        "Preserve sentence structure that sounds natural in German.\n"
+    ),
+    "pt": (
+        "Use Brazilian Portuguese (Português do Brasil) unless specified.\n"
+        "Keep dialogue natural and conversational. Use você/tu appropriately.\n"
+        "Avoid overly formal constructions in casual dialogue.\n"
+    ),
+    "ru": (
+        "Use natural Russian that fits the character's tone.\n"
+        "Choose appropriate formality level (ты/вы) based on context.\n"
+        "Keep translations concise for bubble space.\n"
+    ),
+    "vi": (
+        "Use natural Vietnamese with appropriate pronouns based on age/relationship.\n"
+        "Keep dialogue conversational and suitable for manga bubbles.\n"
+        "Avoid overly literary or formal phrasing in casual scenes.\n"
+    ),
+    "th": (
+        "Use natural Thai with appropriate politeness particles.\n"
+        "Match formality to the scene (ครับ/ค่ะ when appropriate).\n"
+        "Keep dialogue concise and readable.\n"
+    ),
+    "ms": (
+        "Use standard Malay (Bahasa Melayu).\n"
+        "Keep dialogue natural and conversational.\n"
+        "Use appropriate register based on character relationships.\n"
+    ),
+    "ko": (
+        "Use natural Korean with appropriate speech levels.\n"
+        "Match formality (반말/존댓말) to character relationships.\n"
+        "Keep translations suitable for speech bubbles.\n"
+    ),
+    "zh": (
+        "Use natural Simplified Chinese.\n"
+        "Keep dialogue conversational and concise.\n"
+        "Match the tone and register of the original.\n"
+    ),
+    "zh-tw": (
+        "Use natural Traditional Chinese.\n"
+        "Keep dialogue conversational and concise.\n"
+        "Match the tone and register of the original.\n"
+    ),
+}
+
+# Default style hint for languages not in STYLE_HINTS
+DEFAULT_STYLE_HINT = (
+    "Localize rather than translate literally.\n"
+    "Preserve tone, emotion, and intent; keep character names as-is.\n"
+    "Keep dialogue concise and suitable for manga bubble space.\n"
+    "Use natural phrasing that sounds like real speech.\n"
+)
+
 
 class MangaTranslator:
     def __init__(
@@ -138,20 +218,17 @@ class MangaTranslator:
         src_name = LANGUAGE_NAMES.get(source_lang, source_lang)
         tgt_name = LANGUAGE_NAMES.get(target_lang, target_lang)
 
-        style_hint = ""
-        if target_lang == "id":
-            style_hint = (
-                "Use natural Indonesian that is clear and conversational, but not slangy.\n"
-                "Avoid overly formal or stiff phrasing.\n"
-            )
+        # Get language-specific style hint or default
+        style_hint = STYLE_HINTS.get(target_lang, DEFAULT_STYLE_HINT)
 
         return (
-            f"You are translating {src_name} manga dialogue into natural {tgt_name}.\n"
+            f"You are a professional manga translator, translating {src_name} manga dialogue into natural {tgt_name}.\n"
             "Make it sound like real people speaking, not a literal translation.\n"
-            "Preserve emotion, personality, and intent. Keep character names as-is.\n"
-            "Use short, conversational sentences where appropriate.\n"
+            "Preserve emotion, personality, character voice, and intent.\n"
+            "Keep character names and proper nouns as-is (do not translate names).\n"
+            "Use short, conversational sentences that fit in speech bubbles.\n"
             f"{style_hint}"
-            "Return only the translated dialogue, no extra text.\n\n"
+            "Return only the translated dialogue, no commentary or extra text.\n\n"
             f"Text:\n{text}"
         )
 
@@ -159,22 +236,20 @@ class MangaTranslator:
         src_name = LANGUAGE_NAMES.get(source_lang, source_lang)
         tgt_name = LANGUAGE_NAMES.get(target_lang, target_lang)
 
-        style_hint = ""
-        if target_lang == "id":
-            style_hint = (
-                "Use natural Indonesian that is clear and conversational, but not slangy.\n"
-                "Avoid overly formal or stiff phrasing.\n"
-            )
+        # Get language-specific style hint or default
+        style_hint = STYLE_HINTS.get(target_lang, DEFAULT_STYLE_HINT)
 
         numbered = "\n".join([f"{i+1}. {self._preprocess_text(t)}" for i, t in enumerate(texts)])
 
         return (
-            f"You are translating {src_name} manga dialogue into natural {tgt_name}.\n"
+            f"You are a professional manga translator, translating {src_name} manga dialogue into natural {tgt_name}.\n"
             "Make it sound like real people speaking, not a literal translation.\n"
-            "Preserve emotion, personality, and intent. Keep character names as-is.\n"
-            "Use short, conversational sentences where appropriate.\n"
+            "Preserve emotion, personality, character voice, and intent.\n"
+            "Keep character names and proper nouns as-is (do not translate names).\n"
+            "Use short, conversational sentences that fit in speech bubbles.\n"
             f"{style_hint}"
-            "Return only the translations as a numbered list with the same numbering.\n\n"
+            "Return only the translations as a numbered list matching the input numbering.\n"
+            "Each line should contain only the translated text for that item.\n\n"
             f"Text:\n{numbered}"
         )
 
