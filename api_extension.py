@@ -18,6 +18,7 @@ from PIL import Image
 
 from services import Services
 from cache import get_translation_cache
+from bubble_split import split_merged_bubbles, filter_duplicate_regions
 
 logger = logging.getLogger(__name__)
 extension_api = Blueprint('extension_api', __name__)
@@ -166,6 +167,13 @@ def translate_viewport():
                 'cached_hits': 0
             }
         })
+
+    # 1.5. Split merged bubbles (tall regions that may contain multiple bubbles)
+    t0_split = time.perf_counter()
+    detections = split_merged_bubbles(image_np, detections)
+    detections = filter_duplicate_regions(detections, iou_threshold=0.5)
+    timings['split_ms'] = int((time.perf_counter() - t0_split) * 1000)
+    logger.info(f"After split: {len(detections)} regions")
 
     # 2. OCR per region (parallel)
     t0 = time.perf_counter()
