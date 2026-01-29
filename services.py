@@ -1,19 +1,29 @@
 """
 Singleton services for optimized model loading.
 Models are loaded once and reused across all requests.
+Auto-detects CUDA GPU for acceleration.
 """
 
 import os
 import logging
 from threading import Lock
 from typing import Optional
+import torch
 
 logger = logging.getLogger(__name__)
 
-# CPU Optimization settings
-os.environ.setdefault("OMP_NUM_THREADS", "8")
-os.environ.setdefault("MKL_NUM_THREADS", "8")
-os.environ.setdefault("OPENBLAS_NUM_THREADS", "8")
+# Auto-detect GPU
+USE_GPU = torch.cuda.is_available()
+GPU_NAME = torch.cuda.get_device_name(0) if USE_GPU else None
+
+if USE_GPU:
+    logger.info(f"CUDA GPU detected: {GPU_NAME}")
+else:
+    logger.info("No CUDA GPU, using CPU optimization")
+    # CPU Optimization settings (only when no GPU)
+    os.environ.setdefault("OMP_NUM_THREADS", "8")
+    os.environ.setdefault("MKL_NUM_THREADS", "8")
+    os.environ.setdefault("OPENBLAS_NUM_THREADS", "8")
 
 
 class Services:
@@ -45,16 +55,22 @@ class Services:
     def get_yolo(cls):
         """
         Get YOLO model instance (singleton).
-        Auto-detects best available format: INT8 > FP32 > PyTorch.
+        Priority: CUDA GPU > OpenVINO INT8 > OpenVINO FP32 > PyTorch CPU.
         """
         if cls._yolo is None:
             with cls._yolo_lock:
                 if cls._yolo is None:
                     from ultralytics import YOLO
 
-                    # Priority: INT8 > FP32 > PyTorch
-                    if os.path.exists(cls.YOLO_OPENVINO_INT8):
-                        logger.info("Loading YOLO with OpenVINO INT8 (fastest)")
+                    # Priority: CUDA > OpenVINO INT8 > FP32 > PyTorch
+                    if USE_GPU:
+                        # Use PyTorch with CUDA
+                        logger.info(f"Loading YOLO with CUDA GPU ({GPU_NAME})")
+                        cls._yolo = YOLO(cls.YOLO_MODEL)
+                        cls._yolo.to('cuda')
+                        cls._yolo_format = "pytorch_cuda"
+                    elif os.path.exists(cls.YOLO_OPENVINO_INT8):
+                        logger.info("Loading YOLO with OpenVINO INT8 (fastest CPU)")
                         cls._yolo = YOLO(cls.YOLO_OPENVINO_INT8)
                         cls._yolo_format = "openvino_int8"
                     elif os.path.exists(cls.YOLO_OPENVINO_FP32):
@@ -62,10 +78,10 @@ class Services:
                         cls._yolo = YOLO(cls.YOLO_OPENVINO_FP32)
                         cls._yolo_format = "openvino_fp32"
                     else:
-                        logger.info("Loading YOLO PyTorch model")
+                        logger.info("Loading YOLO PyTorch model (CPU)")
                         logger.info("  Tip: Run 'python export_openvino.py --int8' for 2-3x speedup")
                         cls._yolo = YOLO(cls.YOLO_MODEL)
-                        cls._yolo_format = "pytorch"
+                        cls._yolo_format = "pytorch_cpu"
 
         return cls._yolo
 

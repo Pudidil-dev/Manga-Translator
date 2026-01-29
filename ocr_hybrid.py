@@ -1,6 +1,7 @@
 """
 Hybrid Multi-Language OCR Service.
 Uses MangaOCR for Japanese, EasyOCR for other languages.
+Auto-detects CUDA GPU for acceleration.
 """
 
 import logging
@@ -9,8 +10,16 @@ from threading import Lock
 from typing import Union
 from PIL import Image
 import numpy as np
+import torch
 
 logger = logging.getLogger(__name__)
+
+# Auto-detect GPU
+USE_GPU = torch.cuda.is_available()
+if USE_GPU:
+    logger.info(f"CUDA GPU detected: {torch.cuda.get_device_name(0)}")
+else:
+    logger.info("No CUDA GPU detected, using CPU")
 
 # Supported languages
 SUPPORTED_LANGUAGES = {
@@ -96,7 +105,7 @@ class HybridOCR:
 
                     self._easyocr_readers[lang_key] = easyocr.Reader(
                         lang_codes,
-                        gpu=False,
+                        gpu=USE_GPU,
                         verbose=False,
                     )
                     logger.info(f"EasyOCR ({lang}) loaded")
