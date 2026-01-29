@@ -1,6 +1,11 @@
 /**
  * Cache for rendered translated images.
  * Uses Canvas API to render text onto images and stores as Blob.
+ *
+ * Features:
+ * - Collision detection between text regions
+ * - Auto font sizing to fit bubble
+ * - Smart text wrapping for CJK and Latin
  */
 
 export interface Region {
@@ -20,6 +25,14 @@ export interface Region {
   };
 }
 
+interface TextBounds {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  regionId: string;
+}
+
 interface CachedImage {
   originalSrc: string;
   translatedBlob: Blob;
@@ -33,6 +46,13 @@ interface CachedImage {
 export class TranslatedImageCache {
   private memoryCache: Map<string, CachedImage> = new Map();
   private maxMemoryItems: number = 50;
+
+  // Minimum gap between text regions (pixels)
+  private readonly MIN_TEXT_GAP = 4;
+  // Minimum font size
+  private readonly MIN_FONT_SIZE = 8;
+  // Maximum font size
+  private readonly MAX_FONT_SIZE = 28;
 
   /**
    * Render image with translations and cache the result.
@@ -66,9 +86,20 @@ export class TranslatedImageCache {
       throw error;
     }
 
-    // Render each translated bubble
-    for (const region of regions) {
-      this.renderBubble(ctx, region);
+    // Sort regions by Y position (top to bottom) for proper layering
+    const sortedRegions = [...regions].sort((a, b) => a.bbox[1] - b.bbox[1]);
+
+    // First pass: Draw all white masks
+    for (const region of sortedRegions) {
+      this.drawMask(ctx, region);
+    }
+
+    // Calculate optimal font sizes considering collisions
+    const optimizedRegions = this.optimizeFontSizes(ctx, sortedRegions);
+
+    // Second pass: Draw all text
+    for (const region of optimizedRegions) {
+      this.renderText(ctx, region);
     }
 
     console.log('[MangaTranslate Cache] All bubbles rendered');
@@ -95,17 +126,143 @@ export class TranslatedImageCache {
   }
 
   /**
-   * Render single bubble onto canvas.
+   * Optimize font sizes to prevent text overlap between regions.
    */
-  private renderBubble(ctx: CanvasRenderingContext2D, region: Region) {
+  private optimizeFontSizes(ctx: CanvasRenderingContext2D, regions: Region[]): Region[] {
+    const optimized: Region[] = [];
+    const renderedBounds: TextBounds[] = [];
+
+    for (const region of regions) {
+      const [x, y, w, h] = region.bbox;
+      const text = region.tgt_text;
+
+      if (!text || text.trim().length === 0) {
+        optimized.push(region);
+        continue;
+      }
+
+      // Calculate available space considering mask type
+      const availableWidth = this.getAvailableWidth(region);
+      const availableHeight = this.getAvailableHeight(region);
+
+      // Start with suggested font size or calculate based on area
+      let fontSize = Math.min(
+        region.render?.font_size || 14,
+        this.MAX_FONT_SIZE,
+        Math.floor(availableHeight / 3),
+        Math.floor(availableWidth / 3)
+      );
+
+      // Try to fit text, reducing font size if needed
+      let textBounds: TextBounds | null = null;
+      let bestLines: string[] = [];
+
+      while (fontSize >= this.MIN_FONT_SIZE) {
+        ctx.font = `500 ${fontSize}px "Noto Sans", "Segoe UI", Arial, sans-serif`;
+        const lineHeight = fontSize * (region.render?.line_height || 1.2);
+
+        const lines = this.wrapText(ctx, text, availableWidth * 0.9);
+        const totalTextHeight = lines.length * lineHeight;
+
+        // Check if text fits in bubble
+        if (totalTextHeight <= availableHeight * 0.9) {
+          // Calculate text bounds
+          const maxLineWidth = Math.max(...lines.map(line => ctx.measureText(line).width));
+          const cx = x + w / 2;
+          const cy = y + h / 2;
+
+          textBounds = {
+            x: cx - maxLineWidth / 2 - this.MIN_TEXT_GAP,
+            y: cy - totalTextHeight / 2 - this.MIN_TEXT_GAP,
+            width: maxLineWidth + this.MIN_TEXT_GAP * 2,
+            height: totalTextHeight + this.MIN_TEXT_GAP * 2,
+            regionId: region.id
+          };
+
+          // Check for collision with already rendered regions
+          const hasCollision = renderedBounds.some(bound =>
+            this.checkCollision(textBounds!, bound)
+          );
+
+          if (!hasCollision) {
+            bestLines = lines;
+            break;
+          }
+        }
+
+        fontSize -= 1;
+      }
+
+      // If we found a valid size, record the bounds
+      if (textBounds && fontSize >= this.MIN_FONT_SIZE) {
+        renderedBounds.push(textBounds);
+      }
+
+      // Create optimized region with new font size
+      optimized.push({
+        ...region,
+        render: {
+          ...region.render,
+          font_size: Math.max(fontSize, this.MIN_FONT_SIZE),
+        }
+      });
+    }
+
+    return optimized;
+  }
+
+  /**
+   * Check if two text bounds collide.
+   */
+  private checkCollision(a: TextBounds, b: TextBounds): boolean {
+    return !(
+      a.x + a.width < b.x ||
+      b.x + b.width < a.x ||
+      a.y + a.height < b.y ||
+      b.y + b.height < a.y
+    );
+  }
+
+  /**
+   * Get available width inside bubble (accounting for mask shape).
+   */
+  private getAvailableWidth(region: Region): number {
+    const [, , w] = region.bbox;
+
+    switch (region.mask_type) {
+      case 'ellipse':
+        return w * 0.7; // Ellipse has less usable width
+      case 'rect':
+        return w * 0.85;
+      default:
+        return w * 0.75;
+    }
+  }
+
+  /**
+   * Get available height inside bubble (accounting for mask shape).
+   */
+  private getAvailableHeight(region: Region): number {
+    const [, , , h] = region.bbox;
+
+    switch (region.mask_type) {
+      case 'ellipse':
+        return h * 0.65; // Ellipse has less usable height
+      case 'rect':
+        return h * 0.85;
+      default:
+        return h * 0.7;
+    }
+  }
+
+  /**
+   * Draw white mask for bubble.
+   */
+  private drawMask(ctx: CanvasRenderingContext2D, region: Region) {
     const [x, y, w, h] = region.bbox;
     const cx = x + w / 2;
     const cy = y + h / 2;
 
-    console.log('[MangaTranslate Cache] Rendering bubble:', region.id, 'at', x, y, w, h);
-    console.log('[MangaTranslate Cache] Text:', region.src_text, '->', region.tgt_text);
-
-    // Step 1: Draw white mask
     ctx.save();
     ctx.fillStyle = '#FFFFFF';
 
@@ -120,6 +277,7 @@ export class TranslatedImageCache {
     } else {
       switch (region.mask_type) {
         case 'rect':
+          // Add small padding to avoid edge artifacts
           ctx.fillRect(x + 2, y + 2, w - 4, h - 4);
           break;
         case 'ellipse':
@@ -131,15 +289,24 @@ export class TranslatedImageCache {
       }
     }
     ctx.restore();
+  }
 
-    // Step 2: Draw translated text
+  /**
+   * Render text onto canvas.
+   */
+  private renderText(ctx: CanvasRenderingContext2D, region: Region) {
+    const [x, y, w, h] = region.bbox;
+    const cx = x + w / 2;
+    const cy = y + h / 2;
     const text = region.tgt_text;
+
     if (!text || text.trim().length === 0) {
-      console.log('[MangaTranslate Cache] No text to render for region:', region.id);
       return;
     }
 
-    const fontSize = region.render?.font_size || 14;
+    // Use optimized font size
+    const fontSize = Math.max(region.render?.font_size || 14, this.MIN_FONT_SIZE);
+    const lineHeight = fontSize * (region.render?.line_height || 1.2);
 
     ctx.save();
     ctx.fillStyle = '#000000';
@@ -147,28 +314,43 @@ export class TranslatedImageCache {
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
 
-    // Word wrap
-    const maxWidth = w * 0.85;
+    // Get available width for text
+    const maxWidth = this.getAvailableWidth(region);
     const lines = this.wrapText(ctx, text, maxWidth);
-    const lineHeight = fontSize * (region.render?.line_height || 1.25);
 
-    // Center vertically
+    // Calculate total height and starting position
     const totalHeight = lines.length * lineHeight;
-    const startY = cy - totalHeight / 2 + lineHeight / 2;
+    const availableHeight = this.getAvailableHeight(region);
+
+    // Ensure text stays within bubble
+    const clampedHeight = Math.min(totalHeight, availableHeight);
+    const startY = cy - clampedHeight / 2 + lineHeight / 2;
 
     // Draw each line
     for (let i = 0; i < lines.length; i++) {
-      ctx.fillText(lines[i], cx, startY + i * lineHeight);
+      const lineY = startY + i * lineHeight;
+
+      // Skip lines that would go outside the bubble
+      if (lineY < y + h * 0.1 || lineY > y + h * 0.9) {
+        continue;
+      }
+
+      ctx.fillText(lines[i], cx, lineY);
     }
 
     ctx.restore();
-    console.log('[MangaTranslate Cache] Rendered', lines.length, 'lines of text');
   }
 
   /**
    * Word wrap for canvas text.
    */
   private wrapText(ctx: CanvasRenderingContext2D, text: string, maxWidth: number): string[] {
+    // Handle empty or very short text
+    if (!text || text.trim().length === 0) {
+      return [];
+    }
+
+    // Check if text contains CJK characters
     const isCJK = /[\u3000-\u9fff\uac00-\ud7af]/.test(text);
 
     if (isCJK) {
@@ -178,11 +360,23 @@ export class TranslatedImageCache {
     }
   }
 
+  /**
+   * Wrap CJK text (character by character).
+   */
   private wrapCJKText(ctx: CanvasRenderingContext2D, text: string, maxWidth: number): string[] {
     const lines: string[] = [];
     let currentLine = '';
 
     for (const char of text) {
+      // Handle newlines
+      if (char === '\n') {
+        if (currentLine) {
+          lines.push(currentLine);
+        }
+        currentLine = '';
+        continue;
+      }
+
       const testLine = currentLine + char;
       const metrics = ctx.measureText(testLine);
 
@@ -201,8 +395,12 @@ export class TranslatedImageCache {
     return lines;
   }
 
+  /**
+   * Wrap Latin text (word by word).
+   */
   private wrapLatinText(ctx: CanvasRenderingContext2D, text: string, maxWidth: number): string[] {
-    const words = text.split(' ');
+    // Split on whitespace but preserve structure
+    const words = text.replace(/\n/g, ' ').split(/\s+/).filter(w => w.length > 0);
     const lines: string[] = [];
     let currentLine = '';
 
@@ -212,7 +410,15 @@ export class TranslatedImageCache {
 
       if (metrics.width > maxWidth && currentLine.length > 0) {
         lines.push(currentLine);
-        currentLine = word;
+
+        // Check if single word is too long, break it
+        if (ctx.measureText(word).width > maxWidth) {
+          const brokenLines = this.breakLongWord(ctx, word, maxWidth);
+          lines.push(...brokenLines.slice(0, -1));
+          currentLine = brokenLines[brokenLines.length - 1] || '';
+        } else {
+          currentLine = word;
+        }
       } else {
         currentLine = testLine;
       }
@@ -225,12 +431,35 @@ export class TranslatedImageCache {
     return lines;
   }
 
+  /**
+   * Break a long word that doesn't fit in maxWidth.
+   */
+  private breakLongWord(ctx: CanvasRenderingContext2D, word: string, maxWidth: number): string[] {
+    const lines: string[] = [];
+    let currentPart = '';
+
+    for (const char of word) {
+      const testPart = currentPart + char;
+      if (ctx.measureText(testPart).width > maxWidth && currentPart.length > 0) {
+        lines.push(currentPart);
+        currentPart = char;
+      } else {
+        currentPart = testPart;
+      }
+    }
+
+    if (currentPart) {
+      lines.push(currentPart);
+    }
+
+    return lines;
+  }
+
   private canvasToBlob(canvas: HTMLCanvasElement): Promise<Blob> {
     return new Promise((resolve, reject) => {
       canvas.toBlob(
         (blob) => {
           if (blob) {
-            console.log('[MangaTranslate Cache] Canvas converted to blob, size:', blob.size);
             resolve(blob);
           } else {
             reject(new Error('Failed to create blob from canvas'));
