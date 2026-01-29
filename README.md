@@ -1,6 +1,6 @@
 # Manga Translator
 
-Python tool for translating text found within speech bubbles in manga images. It utilizes YOLOv8 for bubble detection, MangaOCR for text extraction, OpenCV, NumPy and Pillow for image processing and translation services like google, bing, baidu and Helsinki-NLP's opus-mt-ja-en model for text translation.
+Python tool for translating text found within speech bubbles in manga images. It utilizes YOLOv8 for bubble detection, MangaOCR for text extraction, OpenCV, NumPy and Pillow for image processing and Gemini API for text translation.
 
 ## How it works
 
@@ -47,14 +47,15 @@ Python tool for translating text found within speech bubbles in manga images. It
 2. Run the `main.py` script with the required arguments:
 
     ```bash
-    python main.py --model-path /path/to/model --image-path /path/to/image --font-path /path/to/font --translator [google/hf/bing/baidu] --save-path /path/to/save
+    python main.py --model-path /path/to/model --image-path /path/to/image --font-path /path/to/font --source-lang ja --target-lang en --save-path /path/to/save
     ```
 
     Replace the arguments as follows:
     - `/path/to/model`: Path to the YOLO model.
     - `/path/to/image`: Path to the input manga image.
     - `/path/to/font`: Path to the font file for adding text. (default: "fonts/animeace_i.ttf")
-    - `[google/hf/bing/baidu]`: Choose the translation service, "hf" stands for Helsinki-NLP/opus-mt-ja-en model. (default: "google")
+    - `--source-lang`: Source language code (default: ja)
+    - `--target-lang`: Target language code (default: en)
     - `/path/to/save`: Path to save the output image. (the image will be saved as "output_image.jpg")
 
 ### Flask Web App
@@ -71,7 +72,15 @@ Python tool for translating text found within speech bubbles in manga images. It
     python app.py
     ```
 
-3. Open your web browser and go to `http://localhost:5000` to access the app.
+3. Configure Gemini via `.env` (recommended):
+
+    ```bash
+    GEMINI_API_URL=http://localhost:8317/
+    GEMINI_API_KEY=pudidil
+    GEMINI_MODEL=gemini-2.5-flash
+    ```
+
+4. Open your web browser and go to `http://localhost:5000` to access the app.
    
 ## Demo
 

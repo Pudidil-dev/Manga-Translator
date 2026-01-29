@@ -1,0 +1,10 @@
+# Calibration dataset for INT8 quantization
+# Uses manga pages for calibration data
+
+path: D:/manga2/Manga-Translator/model/calibration
+train: .
+val: .
+
+# Classes (same as training)
+names:
+  0: bubble

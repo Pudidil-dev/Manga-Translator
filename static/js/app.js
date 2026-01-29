@@ -51,10 +51,12 @@ function truncateFileName(fileName, maxLength) {
 
 // Updates hidden input fields with selected options
 function updateHiddenInputs() {
+    const sourceLanguage = document.querySelector("#source_lang .selected").innerText;
     const selectedLanguage = document.querySelector("#language .selected").innerText;
     const selectedTranslator = document.querySelector("#translator .selected").innerText;
     const selectedFont = document.querySelector("#font .selected").innerText;
 
+    document.getElementById("source_language").value = sourceLanguage;
     document.getElementById("selected_language").value = selectedLanguage;
     document.getElementById("selected_translator").value = selectedTranslator;
     document.getElementById("selected_font").value = selectedFont;

@@ -1,17 +1,42 @@
-deep-translator==1.11.4
-translators==5.9.1
-huggingface-hub==0.22.2
-manga-ocr==0.1.11
-numpy==1.24.2
-opencv-python==4.9.0.80
-pillow==10.3.0
-ultralytics==8.1.43
-Flask==2.2.5
-Werkzeug==3.0.1
-gunicorn==21.2.0
-tqdm==4.66.2
-safetensors==0.4.2
-cryptography==42.0.4
-torch==2.0.1
-torchvision==0.15.2
-sentencepiece==0.2.0
+# Manga Translator - Requirements
+# Optimized for Intel CPU (i7 Gen 11)
+# Supports: Japanese (MangaOCR), Korean/Chinese/English (EasyOCR)
+
+# Core dependencies
+# IMPORTANT: numpy 2.x has compatibility issues with transformers/torch
+numpy>=1.24.2,<2.0
+opencv-python>=4.9.0.80
+pillow>=10.3.0
+tqdm>=4.66.2
+
+# ML Models - Japanese OCR
+ultralytics>=8.1.43
+manga-ocr>=0.1.11
+torch>=2.0.1
+torchvision>=0.15.2
+sentencepiece>=0.2.0
+huggingface-hub>=0.22.2
+safetensors>=0.4.2
+
+# ML Models - Multi-language OCR (Korean, Chinese, English)
+easyocr>=1.7.0
+
+# Translation API
+httpx>=0.27.0
+python-dotenv>=1.0.1
+
+# Web Framework
+Flask>=2.2.5
+Werkzeug>=3.0.1
+gunicorn>=21.2.0
+gradio>=4.0.0
+
+# Security
+cryptography>=42.0.4
+
+# Intel CPU Optimization (recommended for i7)
+openvino>=2024.0.0
+
+# Legacy translator support (optional)
+deep-translator>=1.11.4
+translators>=5.9.1
