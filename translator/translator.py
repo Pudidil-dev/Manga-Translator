@@ -460,8 +460,9 @@ class AsyncTranslator:
         source_lang: str,
         target_lang: str,
         semaphore: asyncio.Semaphore,
+        retry_count: int = 2,
     ) -> str:
-        """Translate single text asynchronously."""
+        """Translate single text asynchronously with retry support."""
         if not text or not text.strip():
             return ""
 
@@ -470,35 +471,80 @@ class AsyncTranslator:
         if cache_key in self._cache:
             return self._cache[cache_key]
 
-        async with semaphore:
-            prompt = self._build_prompt(text, source_lang, target_lang)
-            payload = {
-                "contents": [{"parts": [{"text": prompt}]}],
-                "generationConfig": {"temperature": 0.2, "maxOutputTokens": 512},
-            }
-            url = self._build_url()
+        text_preview = text[:40].replace('\n', ' ')
+        last_error = None
 
-            try:
-                async with session.post(
-                    url,
-                    json=payload,
-                    timeout=aiohttp.ClientTimeout(total=self.timeout)
-                ) as response:
-                    if response.status == 200:
-                        data = await response.json()
-                        result = self._extract_text(data)
-                        if result:
-                            self._cache[cache_key] = result
-                        return result or text
+        for attempt in range(retry_count + 1):
+            async with semaphore:
+                prompt = self._build_prompt(text, source_lang, target_lang)
+                payload = {
+                    "contents": [{"parts": [{"text": prompt}]}],
+                    "generationConfig": {"temperature": 0.2, "maxOutputTokens": 512},
+                }
+                url = self._build_url()
+
+                try:
+                    # Increase timeout for retries
+                    timeout = self.timeout * (1 + attempt * 0.5)
+                    async with session.post(
+                        url,
+                        json=payload,
+                        timeout=aiohttp.ClientTimeout(total=timeout)
+                    ) as response:
+                        if response.status == 200:
+                            data = await response.json()
+                            result = self._extract_text(data)
+                            if result:
+                                self._cache[cache_key] = result
+                                return result
+                            else:
+                                logger.warning(f"Empty response for: {text_preview}...")
+                                return text
+                        elif response.status == 429:
+                            # Rate limited - wait and retry
+                            wait_time = 2 ** attempt
+                            logger.warning(f"Rate limited, waiting {wait_time}s before retry...")
+                            await asyncio.sleep(wait_time)
+                            last_error = f"Rate limited (429)"
+                            continue
+                        elif response.status >= 500:
+                            # Server error - retry
+                            wait_time = 1 * (attempt + 1)
+                            logger.warning(f"Server error {response.status}, retrying in {wait_time}s...")
+                            await asyncio.sleep(wait_time)
+                            last_error = f"Server error ({response.status})"
+                            continue
+                        else:
+                            logger.warning(f"Gemini API error {response.status} for: {text_preview}...")
+                            return text
+
+                except asyncio.TimeoutError:
+                    last_error = "timeout"
+                    if attempt < retry_count:
+                        logger.warning(f"Translation timeout (attempt {attempt + 1}/{retry_count + 1}) for: {text_preview}...")
+                        await asyncio.sleep(1)
+                        continue
                     else:
-                        logger.warning(f"Gemini API error: {response.status}")
+                        logger.warning(f"Translation timeout for: {text_preview}...")
                         return text
-            except asyncio.TimeoutError:
-                logger.warning(f"Translation timeout for: {text[:30]}...")
-                return text
-            except Exception as e:
-                logger.warning(f"Translation failed: {e}")
-                return text
+
+                except aiohttp.ClientError as e:
+                    last_error = str(e)
+                    if attempt < retry_count:
+                        logger.warning(f"Connection error (attempt {attempt + 1}): {e}")
+                        await asyncio.sleep(1)
+                        continue
+                    else:
+                        logger.warning(f"Translation connection failed for: {text_preview}... - {e}")
+                        return text
+
+                except Exception as e:
+                    logger.warning(f"Translation failed for: {text_preview}... - {e}")
+                    return text
+
+        # All retries exhausted
+        logger.warning(f"Translation failed after {retry_count + 1} attempts for: {text_preview}... (last error: {last_error})")
+        return text
 
     async def translate_batch_async(
         self,
