@@ -413,7 +413,18 @@ class Services:
                     from ultralytics import YOLO
 
                     logger.info("Loading OSB YOLO model")
-                    cls._osb_yolo = YOLO(cls.OSB_YOLO_MODEL)
+                    try:
+                        cls._osb_yolo = YOLO(cls.OSB_YOLO_MODEL)
+                    except AttributeError as e:
+                        # Handle model compatibility issue with fuse()
+                        if "has no attribute 'bn'" in str(e):
+                            logger.warning("Model fuse() compatibility issue, loading without fuse")
+                            cls._osb_yolo = YOLO(cls.OSB_YOLO_MODEL)
+                            # Disable fuse to prevent errors
+                            if hasattr(cls._osb_yolo, 'model') and hasattr(cls._osb_yolo.model, 'fuse'):
+                                cls._osb_yolo.model.fuse = lambda verbose=False: cls._osb_yolo.model
+                        else:
+                            raise
 
                     # Use GPU if available
                     if USE_CUDA:

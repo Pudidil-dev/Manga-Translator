@@ -187,12 +187,27 @@ class OSBDetector:
 
             # Step 1: Run OSB YOLO to detect ALL text regions
             logger.info("Running YOLO OSB Text detection...")
-            osb_results = self._osb_model.predict(
-                img_bgr,
-                conf=confidence,
-                verbose=False,
-                device='cpu'
-            )[0]
+            try:
+                osb_results = self._osb_model.predict(
+                    img_bgr,
+                    conf=confidence,
+                    verbose=False,
+                    device='cpu'
+                )[0]
+            except AttributeError as e:
+                # Handle model compatibility issue with fuse()
+                if "'Conv' object has no attribute 'bn'" in str(e):
+                    logger.warning("Model fuse() failed, retrying without fuse")
+                    # Force reload model without fuse
+                    self._osb_model.model.fuse = lambda verbose=False: None
+                    osb_results = self._osb_model.predict(
+                        img_bgr,
+                        conf=confidence,
+                        verbose=False,
+                        device='cpu'
+                    )[0]
+                else:
+                    raise
 
             if osb_results.boxes is None or len(osb_results.boxes) == 0:
                 logger.info("No text regions detected by OSB YOLO")

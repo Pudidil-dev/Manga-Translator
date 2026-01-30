@@ -966,6 +966,20 @@ def batch_translate():
         'render_text': data.get('render_text', True),
     }
 
+    # Preload models before parallel processing to avoid race conditions
+    logger.info("Preloading models for batch processing...")
+    t0 = time.perf_counter()
+    Services.get_yolo()  # Main bubble detector
+    Services.get_hybrid_ocr()  # OCR engine
+    if options.get('detect_osb', True):
+        # Preload OSB model
+        try:
+            from osb_detection import get_hybrid_detector
+            get_hybrid_detector()
+        except Exception as e:
+            logger.warning(f"OSB preload failed: {e}")
+    timings['preload_ms'] = int((time.perf_counter() - t0) * 1000)
+
     logger.info(f"Batch translate: {len(images)} images")
 
     # Phase 1: Parallel Detection + OCR
