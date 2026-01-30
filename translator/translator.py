@@ -473,8 +473,16 @@ class AsyncTranslator:
 
         text_preview = text[:40].replace('\n', ' ')
         last_error = None
+        should_retry = False
+        retry_wait = 0
 
         for attempt in range(retry_count + 1):
+            # Wait OUTSIDE semaphore so other tasks can proceed
+            if should_retry and retry_wait > 0:
+                await asyncio.sleep(retry_wait)
+                should_retry = False
+                retry_wait = 0
+
             async with semaphore:
                 prompt = self._build_prompt(text, source_lang, target_lang)
                 payload = {
@@ -501,18 +509,18 @@ class AsyncTranslator:
                                 logger.warning(f"Empty response for: {text_preview}...")
                                 return text
                         elif response.status == 429:
-                            # Rate limited - wait and retry
-                            wait_time = 2 ** attempt
-                            logger.warning(f"Rate limited, waiting {wait_time}s before retry...")
-                            await asyncio.sleep(wait_time)
+                            # Rate limited - mark for retry outside semaphore
+                            retry_wait = 2 ** attempt
+                            logger.warning(f"Rate limited, will retry in {retry_wait}s...")
                             last_error = f"Rate limited (429)"
+                            should_retry = True
                             continue
                         elif response.status >= 500:
-                            # Server error - retry
-                            wait_time = 1 * (attempt + 1)
-                            logger.warning(f"Server error {response.status}, retrying in {wait_time}s...")
-                            await asyncio.sleep(wait_time)
+                            # Server error - mark for retry outside semaphore
+                            retry_wait = 1 * (attempt + 1)
+                            logger.warning(f"Server error {response.status}, will retry in {retry_wait}s...")
                             last_error = f"Server error ({response.status})"
+                            should_retry = True
                             continue
                         else:
                             logger.warning(f"Gemini API error {response.status} for: {text_preview}...")
@@ -522,7 +530,8 @@ class AsyncTranslator:
                     last_error = "timeout"
                     if attempt < retry_count:
                         logger.warning(f"Translation timeout (attempt {attempt + 1}/{retry_count + 1}) for: {text_preview}...")
-                        await asyncio.sleep(1)
+                        should_retry = True
+                        retry_wait = 1
                         continue
                     else:
                         logger.warning(f"Translation timeout for: {text_preview}...")
@@ -532,7 +541,8 @@ class AsyncTranslator:
                     last_error = str(e)
                     if attempt < retry_count:
                         logger.warning(f"Connection error (attempt {attempt + 1}): {e}")
-                        await asyncio.sleep(1)
+                        should_retry = True
+                        retry_wait = 1
                         continue
                     else:
                         logger.warning(f"Translation connection failed for: {text_preview}... - {e}")
