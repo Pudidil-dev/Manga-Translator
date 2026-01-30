@@ -1,0 +1,10 @@
+/* Content script styles - injected via JS */
+.manga-translated {
+  outline: 2px solid #e94560;
+  outline-offset: -2px;
+}
+
+.manga-original {
+  outline: 2px dashed #888;
+  outline-offset: -2px;
+}

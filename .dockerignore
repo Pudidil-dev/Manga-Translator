@@ -1,0 +1,62 @@
+# Manga Translator - .dockerignore
+# Files to exclude from Docker build context
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+
+# Python cache
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Git
+.git/
+.gitignore
+
+# Documentation (not needed in container)
+*.md
+!README.md
+docs/
+
+# Tests
+tests/
+test_*.py
+*_test.py
+
+# Examples (optional, remove if you want examples in container)
+# examples/
+
+# Temporary files
+*.log
+*.tmp
+.DS_Store
+Thumbs.db
+
+# Build artifacts
+*.egg-info/
+dist/
+build/
+
+# Jupyter
+.ipynb_checkpoints/
+*.ipynb
+
+# Model files (will be mounted as volume)
+# model/*.pt
+# model/*.onnx
+
+# Development files
+.env.local
+.env.development
+docker-compose.override.yml

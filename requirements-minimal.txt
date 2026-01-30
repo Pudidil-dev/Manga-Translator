@@ -1,0 +1,30 @@
+# Manga Translator - Minimal Requirements (Realtime Mode Only)
+# For fastest installation - basic translation without advanced features
+
+# Core
+numpy>=1.24.2,<2.0
+opencv-python>=4.9.0.80
+pillow>=10.3.0
+tqdm>=4.66.2
+
+# Detection
+ultralytics>=8.1.43
+torch>=2.0.1
+torchvision>=0.15.2
+
+# Japanese OCR
+manga-ocr>=0.1.11
+sentencepiece>=0.2.0
+huggingface-hub>=0.22.2
+safetensors>=0.4.2
+
+# Multi-language OCR
+easyocr>=1.7.0
+
+# Translation
+httpx>=0.27.0
+python-dotenv>=1.0.1
+
+# Web
+Flask>=2.2.5
+flask-cors>=4.0.0

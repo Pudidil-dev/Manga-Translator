@@ -1,0 +1,131 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Manga Translator</title>
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <div class="container">
+    <h1>Manga Translator</h1>
+
+    <!-- Language Settings -->
+    <div class="section">
+      <h3>Languages</h3>
+      <div class="field">
+        <label for="sourceLang">Source</label>
+        <select id="sourceLang">
+          <option value="ja" selected>Japanese</option>
+          <option value="ko">Korean</option>
+          <option value="zh">Chinese (Simplified)</option>
+          <option value="zh-tw">Chinese (Traditional)</option>
+          <option value="en">English</option>
+        </select>
+      </div>
+
+      <div class="field">
+        <label for="targetLang">Target</label>
+        <select id="targetLang">
+          <option value="id" selected>Indonesian</option>
+          <option value="en">English</option>
+          <option value="es">Spanish</option>
+          <option value="fr">French</option>
+          <option value="de">German</option>
+          <option value="pt">Portuguese</option>
+          <option value="ru">Russian</option>
+          <option value="vi">Vietnamese</option>
+          <option value="th">Thai</option>
+        </select>
+      </div>
+    </div>
+
+    <!-- Feature Toggles -->
+    <div class="section">
+      <h3>Features</h3>
+
+      <div class="toggle-group">
+        <div class="toggle-item">
+          <input type="checkbox" id="detectOsb" checked>
+          <div class="toggle-info">
+            <label for="detectOsb">OSB Detection</label>
+            <span class="toggle-desc">Detect SFX, narration, titles outside bubbles</span>
+          </div>
+        </div>
+
+        <div class="toggle-item">
+          <input type="checkbox" id="useInpainting" checked>
+          <div class="toggle-info">
+            <label for="useInpainting">Inpainting</label>
+            <span class="toggle-desc">Remove original text before adding translation</span>
+          </div>
+        </div>
+
+        <div class="toggle-item sub-toggle" id="inpaintMethodGroup">
+          <label for="inpaintMethod">Method:</label>
+          <select id="inpaintMethod">
+            <option value="opencv" selected>OpenCV (Fast)</option>
+            <option value="canvas">Canvas (Fastest)</option>
+          </select>
+        </div>
+
+        <div class="toggle-item">
+          <input type="checkbox" id="useSam">
+          <div class="toggle-info">
+            <label for="useSam">SAM2 Masks</label>
+            <span class="toggle-desc">Precise bubble segmentation (slower)</span>
+          </div>
+        </div>
+
+        <div class="toggle-item">
+          <input type="checkbox" id="useAdvanced">
+          <div class="toggle-info">
+            <label for="useAdvanced">Advanced Detection</label>
+            <span class="toggle-desc">Dual YOLO for conjoined bubbles (slower)</span>
+          </div>
+        </div>
+
+        <div class="toggle-item">
+          <input type="checkbox" id="renderText" checked>
+          <div class="toggle-info">
+            <label for="renderText">Render Text</label>
+            <span class="toggle-desc">Draw translated text on image</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Backend Settings -->
+    <div class="section collapsible">
+      <h3 class="collapsible-header" id="advancedHeader">
+        Backend Settings
+        <span class="collapse-icon">▼</span>
+      </h3>
+      <div class="collapsible-content" id="advancedContent">
+        <div class="field">
+          <label for="backendUrl">URL</label>
+          <input type="text" id="backendUrl" value="http://127.0.0.1:5000">
+        </div>
+      </div>
+    </div>
+
+    <!-- Actions -->
+    <div class="actions">
+      <button id="translateBtn" class="primary">Translate Page</button>
+      <button id="toggleBtn">Toggle</button>
+      <button id="clearBtn">Clear</button>
+    </div>
+
+    <!-- Status -->
+    <div class="status">
+      <div id="statusText">Ready</div>
+      <div id="progressBar" class="progress-bar">
+        <div id="progressFill" class="progress-fill"></div>
+      </div>
+    </div>
+
+    <div class="stats" id="stats"></div>
+  </div>
+  <script src="popup.js"></script>
+</body>
+</html>
