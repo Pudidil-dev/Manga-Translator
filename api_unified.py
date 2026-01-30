@@ -8,8 +8,11 @@ import base64
 import hashlib
 import logging
 import time
+import asyncio
+import os
 from io import BytesIO
 from typing import Dict, List, Optional, Tuple, Any
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import cv2
 import numpy as np
@@ -22,6 +25,11 @@ logger = logging.getLogger(__name__)
 
 # Create Blueprint
 unified_api = Blueprint('unified_api', __name__)
+
+# Thread pool for parallel image processing
+MAX_WORKERS = int(os.getenv('MAX_WORKERS', '4'))
+BATCH_SIZE = int(os.getenv('BATCH_SIZE', '4'))
+IMAGE_EXECUTOR = ThreadPoolExecutor(max_workers=MAX_WORKERS)
 
 # ============================================================================
 # Caching
@@ -726,6 +734,359 @@ def health():
     return jsonify({
         'ok': True,
         'models': models
+    })
+
+
+# ============================================================================
+# Batch Translation Endpoint
+# ============================================================================
+
+def process_single_image(
+    image_data: Dict,
+    source_lang: str,
+    target_lang: str,
+    options: Dict
+) -> Dict:
+    """
+    Process a single image for batch processing.
+    Returns detection results with OCR texts (translation done separately).
+    """
+    try:
+        image_id = image_data.get('image_id', 'unknown')
+        image_b64 = image_data.get('image_b64', '')
+
+        if not image_b64:
+            return {'image_id': image_id, 'error': 'No image data', 'regions': []}
+
+        # Decode image
+        image_np = decode_base64_image(image_b64)
+        pil_image = Image.fromarray(image_np)
+
+        # Detection
+        use_sam = options.get('use_sam', False)
+        use_advanced = options.get('use_advanced', False)
+        detect_osb_enabled = options.get('detect_osb', True)
+
+        detections = detect_bubbles(pil_image, use_sam=use_sam, use_advanced=use_advanced)
+
+        # OSB Detection
+        if detect_osb_enabled:
+            bubble_boxes = [(d['bbox'][0], d['bbox'][1],
+                            d['bbox'][0] + d['bbox'][2],
+                            d['bbox'][1] + d['bbox'][3]) for d in detections]
+            osb_dets = detect_osb(pil_image, bubble_boxes)
+            detections.extend(osb_dets)
+
+        # OCR all regions
+        ocr = Services.get_hybrid_ocr()
+        regions = []
+
+        for i, det in enumerate(detections):
+            x, y, w, h = det['bbox']
+            x, y = max(0, x), max(0, y)
+            x2 = min(image_np.shape[1], x + w)
+            y2 = min(image_np.shape[0], y + h)
+
+            if x2 <= x or y2 <= y:
+                continue
+
+            crop = image_np[y:y2, x:x2]
+            crop_pil = Image.fromarray(crop)
+
+            src_text = ""
+            if ocr:
+                try:
+                    text = ocr.read(crop_pil, lang=source_lang)
+                    src_text = text.strip() if text else ""
+                except:
+                    pass
+
+            if not src_text and det.get('type') == 'osb':
+                src_text = "[SFX]"
+
+            if src_text:
+                regions.append({
+                    'id': f'r{i}',
+                    'bbox': det['bbox'],
+                    'type': det.get('type', 'bubble'),
+                    'src_text': src_text,
+                    'tgt_text': '',  # Will be filled after batch translation
+                    'confidence': det.get('confidence', 0.9),
+                    'has_sam_mask': det.get('sam_mask') is not None
+                })
+
+        return {
+            'image_id': image_id,
+            'image_b64': image_b64,
+            'image_np': image_np,
+            'detections': detections,
+            'regions': regions,
+            'error': None
+        }
+
+    except Exception as e:
+        logger.error(f"Error processing image {image_data.get('image_id')}: {e}")
+        return {
+            'image_id': image_data.get('image_id', 'unknown'),
+            'error': str(e),
+            'regions': []
+        }
+
+
+def finalize_image(
+    result: Dict,
+    options: Dict
+) -> Dict:
+    """
+    Apply inpainting and text rendering after translation.
+    """
+    try:
+        if result.get('error') or not result.get('regions'):
+            return {
+                'image_id': result['image_id'],
+                'regions': result.get('regions', []),
+                'image_b64': None,
+                'error': result.get('error')
+            }
+
+        image_np = result.get('image_np')
+        if image_np is None:
+            image_np = decode_base64_image(result['image_b64'])
+
+        detections = result.get('detections', [])
+        regions = result.get('regions', [])
+
+        use_inpainting = options.get('use_inpainting', True)
+        inpaint_method = options.get('inpaint_method', 'opencv')
+        render_text_enabled = options.get('render_text', True)
+
+        # Inpainting
+        if use_inpainting and regions:
+            image_np = apply_inpainting(image_np, detections, inpaint_method)
+
+        # Text rendering
+        if render_text_enabled and regions:
+            # Add render params
+            for region in regions:
+                region['render'] = compute_render_params(region['bbox'], region.get('tgt_text', ''))
+            image_np = render_text_on_image(image_np, regions)
+
+        # Encode result
+        pil_result = Image.fromarray(image_np)
+        buffer = BytesIO()
+        pil_result.save(buffer, format='PNG')
+        result_b64 = base64.b64encode(buffer.getvalue()).decode('utf-8')
+
+        # Clean up regions for response (remove numpy arrays)
+        clean_regions = []
+        for r in regions:
+            clean_regions.append({
+                'id': r['id'],
+                'bbox': r['bbox'],
+                'type': r['type'],
+                'src_text': r['src_text'],
+                'tgt_text': r.get('tgt_text', ''),
+                'confidence': r['confidence'],
+                'render': r.get('render', {})
+            })
+
+        return {
+            'image_id': result['image_id'],
+            'regions': clean_regions,
+            'image_b64': result_b64,
+            'error': None
+        }
+
+    except Exception as e:
+        logger.error(f"Error finalizing image {result.get('image_id')}: {e}")
+        return {
+            'image_id': result.get('image_id', 'unknown'),
+            'regions': [],
+            'image_b64': None,
+            'error': str(e)
+        }
+
+
+@unified_api.route('/batch_translate', methods=['POST'])
+def batch_translate():
+    """
+    Process multiple images in parallel.
+
+    Request:
+    {
+        "images": [
+            {"image_id": "img1", "image_b64": "..."},
+            {"image_id": "img2", "image_b64": "..."},
+            ...
+        ],
+        "source_lang": "ja",
+        "target_lang": "id",
+        "detect_osb": true,
+        "use_inpainting": true,
+        "inpaint_method": "opencv",
+        "use_sam": false,
+        "use_advanced": false,
+        "render_text": true
+    }
+
+    Response:
+    {
+        "success": true,
+        "results": [
+            {"image_id": "img1", "regions": [...], "image_b64": "..."},
+            ...
+        ],
+        "meta": {
+            "images_processed": 4,
+            "total_regions": 20,
+            "timings": {...}
+        }
+    }
+    """
+    start_time = time.perf_counter()
+    timings = {}
+
+    data = request.get_json()
+    if not data:
+        return jsonify({'success': False, 'error': 'No data provided'}), 400
+
+    images = data.get('images', [])
+    if not images:
+        return jsonify({'success': False, 'error': 'No images provided'}), 400
+
+    source_lang = data.get('source_lang', 'ja')
+    target_lang = data.get('target_lang', 'id')
+
+    options = {
+        'detect_osb': data.get('detect_osb', True),
+        'use_inpainting': data.get('use_inpainting', True),
+        'inpaint_method': data.get('inpaint_method', 'opencv'),
+        'use_sam': data.get('use_sam', False),
+        'use_advanced': data.get('use_advanced', False),
+        'render_text': data.get('render_text', True),
+    }
+
+    logger.info(f"Batch translate: {len(images)} images")
+
+    # Phase 1: Parallel Detection + OCR
+    t0 = time.perf_counter()
+    detection_results = []
+    futures = {}
+
+    for img_data in images:
+        future = IMAGE_EXECUTOR.submit(
+            process_single_image,
+            img_data,
+            source_lang,
+            target_lang,
+            options
+        )
+        futures[future] = img_data.get('image_id', 'unknown')
+
+    for future in as_completed(futures):
+        try:
+            result = future.result()
+            detection_results.append(result)
+        except Exception as e:
+            image_id = futures[future]
+            logger.error(f"Detection failed for {image_id}: {e}")
+            detection_results.append({
+                'image_id': image_id,
+                'error': str(e),
+                'regions': []
+            })
+
+    timings['detection_ocr_ms'] = int((time.perf_counter() - t0) * 1000)
+
+    # Phase 2: Collect all texts and batch translate
+    t0 = time.perf_counter()
+    all_texts = []
+    text_map = []  # (result_idx, region_idx)
+
+    for res_idx, det_result in enumerate(detection_results):
+        for reg_idx, region in enumerate(det_result.get('regions', [])):
+            text_map.append((res_idx, reg_idx))
+            all_texts.append(region['src_text'])
+
+    if all_texts:
+        # Use async translator for concurrent requests
+        try:
+            from translator.translator import translate_batch_async, get_async_translator
+
+            # Run async translation
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            try:
+                translations = loop.run_until_complete(
+                    translate_batch_async(all_texts, source_lang, target_lang)
+                )
+            finally:
+                loop.close()
+
+            # Map translations back
+            for text_idx, tgt_text in enumerate(translations):
+                res_idx, reg_idx = text_map[text_idx]
+                detection_results[res_idx]['regions'][reg_idx]['tgt_text'] = tgt_text
+
+        except Exception as e:
+            logger.error(f"Batch translation failed: {e}")
+            # Fallback to sync translation
+            translator = Services.get_translator()
+            if translator:
+                translations = translator.translate_batch(all_texts, source_lang, target_lang)
+                for text_idx, tgt_text in enumerate(translations):
+                    res_idx, reg_idx = text_map[text_idx]
+                    detection_results[res_idx]['regions'][reg_idx]['tgt_text'] = tgt_text
+
+    timings['translate_ms'] = int((time.perf_counter() - t0) * 1000)
+
+    # Phase 3: Parallel Inpainting + Rendering
+    t0 = time.perf_counter()
+    final_futures = {}
+
+    for det_result in detection_results:
+        future = IMAGE_EXECUTOR.submit(
+            finalize_image,
+            det_result,
+            options
+        )
+        final_futures[future] = det_result.get('image_id', 'unknown')
+
+    results = []
+    for future in as_completed(final_futures):
+        try:
+            result = future.result()
+            results.append(result)
+        except Exception as e:
+            image_id = final_futures[future]
+            logger.error(f"Finalize failed for {image_id}: {e}")
+            results.append({
+                'image_id': image_id,
+                'regions': [],
+                'image_b64': None,
+                'error': str(e)
+            })
+
+    timings['render_ms'] = int((time.perf_counter() - t0) * 1000)
+
+    # Sort results by image_id to maintain order
+    image_order = {img.get('image_id'): i for i, img in enumerate(images)}
+    results.sort(key=lambda r: image_order.get(r['image_id'], 999))
+
+    total_ms = int((time.perf_counter() - start_time) * 1000)
+    total_regions = sum(len(r.get('regions', [])) for r in results)
+
+    logger.info(f"Batch complete: {len(results)} images, {total_regions} regions in {total_ms}ms")
+
+    return jsonify({
+        'success': True,
+        'results': results,
+        'meta': {
+            'images_processed': len(results),
+            'total_regions': total_regions,
+            'timings': timings,
+            'total_ms': total_ms
+        }
     })
 
 

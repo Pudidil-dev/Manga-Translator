@@ -1,6 +1,6 @@
 /**
- * Content Script - Unified API
- * Detects manga images and processes them with user-selected features.
+ * Content Script - Unified API with Batch Processing
+ * Detects manga images and processes them in batches for better performance.
  */
 
 import { ImageReplacer } from './replacer/ImageReplacer';
@@ -16,6 +16,14 @@ interface Settings {
   useInpainting: boolean;
   inpaintMethod: 'opencv' | 'canvas';
   renderText: boolean;
+  batchSize: number;
+}
+
+interface BatchResult {
+  image_id: string;
+  regions: Region[];
+  image_b64?: string;
+  error?: string;
 }
 
 const imageReplacer = new ImageReplacer();
@@ -24,6 +32,9 @@ let isProcessing = false;
 let currentSettings: Settings | null = null;
 let totalImages = 0;
 let completedImages = 0;
+
+// Default batch size
+const DEFAULT_BATCH_SIZE = 4;
 
 /**
  * Generate hash for image.
@@ -132,13 +143,146 @@ async function getSettings(): Promise<Settings> {
     useInpainting: true,
     inpaintMethod: 'opencv',
     renderText: true,
+    batchSize: DEFAULT_BATCH_SIZE,
   };
 }
 
 /**
- * Process single image using unified API.
+ * Update progress notification.
  */
-async function processImage(image: HTMLImageElement): Promise<boolean> {
+function updateProgress(message: string, percent: number) {
+  console.log(`[MangaTranslate] ${message} (${percent}%)`);
+
+  // Send progress to popup
+  chrome.runtime.sendMessage({
+    action: 'updateProgress',
+    data: { message, percent }
+  }).catch(() => {
+    // Popup might not be open
+  });
+}
+
+/**
+ * Process images in batches for better performance.
+ */
+async function processImagesInBatch(
+  images: HTMLImageElement[],
+  settings: Settings
+): Promise<void> {
+  const batchSize = settings.batchSize || DEFAULT_BATCH_SIZE;
+
+  for (let i = 0; i < images.length; i += batchSize) {
+    const batch = images.slice(i, i + batchSize);
+    const batchNum = Math.floor(i / batchSize) + 1;
+    const totalBatches = Math.ceil(images.length / batchSize);
+
+    updateProgress(
+      `Processing batch ${batchNum}/${totalBatches} (${batch.length} images)`,
+      Math.round((i / images.length) * 90) + 10
+    );
+
+    // Convert all images to base64 in parallel
+    const imageDataPromises = batch.map(async (img, idx) => {
+      try {
+        const base64 = await imageToBase64(img);
+        return {
+          image_id: `img_${i + idx}_${hashImage(img)}`,
+          image_b64: base64,
+          element: img,
+          error: null
+        };
+      } catch (err) {
+        return {
+          image_id: `img_${i + idx}`,
+          image_b64: '',
+          element: img,
+          error: (err as Error).message
+        };
+      }
+    });
+
+    const imageDataResults = await Promise.all(imageDataPromises);
+
+    // Filter out failed conversions
+    const validImages = imageDataResults.filter(r => !r.error && r.image_b64);
+
+    if (validImages.length === 0) {
+      completedImages += batch.length;
+      continue;
+    }
+
+    // Send batch request
+    try {
+      const response = await chrome.runtime.sendMessage({
+        action: 'translateBatch',
+        data: {
+          images: validImages.map(r => ({
+            image_id: r.image_id,
+            image_b64: r.image_b64
+          })),
+          source_lang: settings.sourceLang,
+          target_lang: settings.targetLang,
+          detect_osb: settings.detectOsb,
+          use_inpainting: settings.useInpainting,
+          inpaint_method: settings.inpaintMethod,
+          use_sam: settings.useSam,
+          use_advanced: settings.useAdvanced,
+          render_text: settings.renderText
+        }
+      });
+
+      if (!response?.success) {
+        console.error('[MangaTranslate] Batch translation failed:', response?.error);
+        // Fallback to single image processing
+        for (const imgData of validImages) {
+          await processSingleImage(imgData.element, settings);
+        }
+      } else {
+        // Apply results to images
+        const results = response.results as BatchResult[];
+
+        for (const result of results) {
+          const imageData = validImages.find(r => r.image_id === result.image_id);
+          if (!imageData) continue;
+
+          if (result.error) {
+            console.log(`[MangaTranslate] Image ${result.image_id} failed: ${result.error}`);
+            continue;
+          }
+
+          if (result.image_b64 && result.regions?.length) {
+            try {
+              const processedImage = await loadImageFromBase64(result.image_b64);
+              await imageReplacer.replaceWithInpainted(
+                imageData.element,
+                processedImage,
+                result.regions,
+                result.image_id
+              );
+            } catch (err) {
+              console.log(`[MangaTranslate] Failed to apply result for ${result.image_id}:`, err);
+            }
+          }
+        }
+
+        console.log(`[MangaTranslate] Batch ${batchNum} complete: ${results.length} images processed`);
+      }
+    } catch (error) {
+      console.error('[MangaTranslate] Batch request error:', error);
+      // Fallback to single image processing
+      for (const imgData of validImages) {
+        await processSingleImage(imgData.element, settings);
+      }
+    }
+
+    completedImages += batch.length;
+  }
+}
+
+/**
+ * Process single image (fallback for batch failures).
+ */
+async function processSingleImage(image: HTMLImageElement, settings: Settings): Promise<boolean> {
   const hash = hashImage(image);
 
   try {
@@ -149,7 +293,6 @@ async function processImage(image: HTMLImageElement): Promise<boolean> {
       data: {
         imageHash: hash,
         imageBase64: base64,
-        // Use current settings (background will merge with defaults)
       },
     });
 
@@ -163,7 +306,6 @@ async function processImage(image: HTMLImageElement): Promise<boolean> {
       return false;
     }
 
-    // If backend returned processed image, use it
     if (response.image_b64) {
       try {
         const processedImage = await loadImageFromBase64(response.image_b64);
@@ -174,7 +316,7 @@ async function processImage(image: HTMLImageElement): Promise<boolean> {
           hash
         );
       } catch (err) {
-        console.log('[MangaTranslate] Failed to load processed image, using canvas');
+        console.log('[MangaTranslate] Failed to load processed image');
       }
     }
 
@@ -193,15 +335,7 @@ async function processImage(image: HTMLImageElement): Promise<boolean> {
 }
 
 /**
- * Update progress notification.
- */
-function updateProgress(message: string, percent: number) {
-  // Could send to popup if needed
-  console.log(`[MangaTranslate] ${message} (${percent}%)`);
-}
-
-/**
- * Translate all manga images on page.
+ * Translate all manga images on page using batch processing.
  */
 async function translateAllImages() {
   if (isProcessing) return;
@@ -217,6 +351,7 @@ async function translateAllImages() {
   if (currentSettings.detectOsb) features.push('OSB');
   if (currentSettings.useInpainting) features.push(`Inpaint:${currentSettings.inpaintMethod}`);
   console.log(`[MangaTranslate] Features: ${features.join(', ') || 'default'}`);
+  console.log(`[MangaTranslate] Batch size: ${currentSettings.batchSize || DEFAULT_BATCH_SIZE}`);
 
   updateProgress('Finding images...', 5);
   const images = findMangaImages();
@@ -229,17 +364,10 @@ async function translateAllImages() {
 
   totalImages = images.length;
   completedImages = 0;
-  updateProgress(`Found ${totalImages} images...`, 10);
+  updateProgress(`Found ${totalImages} images, processing in batches...`, 10);
 
-  // Process images (one at a time for stability)
-  for (const img of images) {
-    const success = await processImage(img);
-    completedImages++;
-    updateProgress(
-      `Translating ${completedImages}/${totalImages}${success ? '' : ' (skipped)'}`,
-      Math.round(10 + (completedImages / totalImages) * 90)
-    );
-  }
+  // Process images in batches
+  await processImagesInBatch(images, currentSettings);
 
   const stats = imageReplacer.getStats();
   updateProgress(`Done! ${stats.showingTranslated} images translated`, 100);
@@ -300,4 +428,4 @@ style.textContent = `
 `;
 document.head.appendChild(style);
 
-console.log('[MangaTranslate] Content script loaded (Unified API)');
+console.log('[MangaTranslate] Content script loaded (Batch Processing Mode)');

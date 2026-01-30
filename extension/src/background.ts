@@ -1,6 +1,7 @@
 /**
  * Background Service Worker - Unified API
  * Single endpoint with dynamic feature toggles.
+ * Supports batch processing for parallel image translation.
  */
 
 interface Settings {
@@ -14,6 +15,8 @@ interface Settings {
   useInpainting: boolean;
   inpaintMethod: 'opencv' | 'canvas';
   renderText: boolean;
+  // Batch settings
+  batchSize: number;
 }
 
 const DEFAULT_SETTINGS: Settings = {
@@ -27,10 +30,29 @@ const DEFAULT_SETTINGS: Settings = {
   useInpainting: true,
   inpaintMethod: 'opencv',
   renderText: true,
+  // Batch settings
+  batchSize: 4,
 };
 
+interface BatchImageData {
+  image_id: string;
+  image_b64: string;
+}
+
+interface BatchRequest {
+  images: BatchImageData[];
+  source_lang: string;
+  target_lang: string;
+  detect_osb: boolean;
+  use_inpainting: boolean;
+  inpaint_method: string;
+  use_sam: boolean;
+  use_advanced: boolean;
+  render_text: boolean;
+}
+
 interface TranslateRequest {
-  action: 'translate' | 'fetchImageAsBase64' | 'getSettings' | 'saveSettings' | 'checkHealth';
+  action: 'translate' | 'translateBatch' | 'fetchImageAsBase64' | 'getSettings' | 'saveSettings' | 'checkHealth';
   data?: unknown;
 }
 
@@ -53,7 +75,6 @@ async function handleMessage(message: TranslateRequest, _sender: chrome.runtime.
       return translateImage(settings, message.data as {
         imageHash: string;
         imageBase64: string;
-        // Optional overrides
         sourceLang?: string;
         targetLang?: string;
         useSam?: boolean;
@@ -63,6 +84,9 @@ async function handleMessage(message: TranslateRequest, _sender: chrome.runtime.
         inpaintMethod?: string;
         renderText?: boolean;
       });
+
+    case 'translateBatch':
+      return translateBatch(settings, message.data as BatchRequest);
 
     case 'fetchImageAsBase64':
       return fetchImageAsBase64((message.data as { url: string }).url);
@@ -159,6 +183,48 @@ async function translateImage(settings: Settings, data: {
   }
 }
 
+/**
+ * Batch translation - process multiple images in parallel
+ */
+async function translateBatch(settings: Settings, data: BatchRequest) {
+  try {
+    const response = await fetch(`${settings.backendUrl}/api/batch_translate`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        images: data.images,
+        source_lang: data.source_lang || settings.sourceLang,
+        target_lang: data.target_lang || settings.targetLang,
+        detect_osb: data.detect_osb ?? settings.detectOsb,
+        use_inpainting: data.use_inpainting ?? settings.useInpainting,
+        inpaint_method: data.inpaint_method || settings.inpaintMethod,
+        use_sam: data.use_sam ?? settings.useSam,
+        use_advanced: data.use_advanced ?? settings.useAdvanced,
+        render_text: data.render_text ?? settings.renderText,
+      }),
+    });
+
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status}`);
+    }
+
+    const result = await response.json();
+
+    if (!result.success) {
+      return { success: false, error: result.error || 'Batch translation failed' };
+    }
+
+    return {
+      success: true,
+      results: result.results || [],
+      meta: result.meta || {},
+    };
+  } catch (error: unknown) {
+    const err = error as Error;
+    return { success: false, error: err.message };
+  }
+}
+
 async function fetchImageAsBase64(url: string) {
   try {
     const response = await fetch(url);
@@ -184,4 +250,4 @@ async function fetchImageAsBase64(url: string) {
   }
 }
 
-console.log('[MangaTranslate] Background service worker started (Unified API)');
+console.log('[MangaTranslate] Background service worker started (Unified API + Batch)');

@@ -1,6 +1,7 @@
 import logging
 import os
-from typing import Optional
+import asyncio
+from typing import Optional, List
 
 import httpx
 from dotenv import load_dotenv
@@ -8,6 +9,14 @@ from dotenv import load_dotenv
 logger = logging.getLogger(__name__)
 
 load_dotenv()
+
+# Check if aiohttp is available
+try:
+    import aiohttp
+    AIOHTTP_AVAILABLE = True
+except ImportError:
+    AIOHTTP_AVAILABLE = False
+    logger.warning("aiohttp not installed, async translation disabled")
 
 DEFAULT_API_URL = "https://generativelanguage.googleapis.com/v1beta/models"
 DEFAULT_MODEL = "gemini-2.0-flash"
@@ -376,3 +385,181 @@ class MangaTranslator:
     @staticmethod
     def _preprocess_text(text: str) -> str:
         return text.replace("ï¼Ž", ".")
+
+
+# =============================================================================
+# Async Translator for Parallel Processing
+# =============================================================================
+
+class AsyncTranslator:
+    """
+    Async translator for batch processing with concurrent API requests.
+    Uses aiohttp for non-blocking HTTP calls.
+    """
+
+    def __init__(
+        self,
+        api_key: Optional[str] = None,
+        model: Optional[str] = None,
+        api_url: Optional[str] = None,
+        max_concurrent: int = 4,
+        timeout_seconds: float = 30.0,
+    ):
+        self.api_key = api_key or os.getenv("GEMINI_API_KEY", "")
+        self.model = model or os.getenv("GEMINI_MODEL", DEFAULT_MODEL)
+        self.base_url = api_url or os.getenv("GEMINI_API_URL", DEFAULT_API_URL)
+        self.timeout = timeout_seconds
+        self.max_concurrent = max_concurrent
+        self._cache: dict[str, str] = {}
+
+    def _build_url(self) -> str:
+        base = self.base_url.rstrip("/")
+        if "/v1beta" in base or "/v1/" in base:
+            url = f"{base}/{self.model}:generateContent"
+        else:
+            url = f"{base}/v1beta/models/{self.model}:generateContent"
+        if self.api_key:
+            url = f"{url}?key={self.api_key}"
+        return url
+
+    def _build_prompt(self, text: str, source_lang: str, target_lang: str) -> str:
+        src_name = LANGUAGE_NAMES.get(source_lang, source_lang)
+        tgt_name = LANGUAGE_NAMES.get(target_lang, target_lang)
+        style_hint = STYLE_HINTS.get(target_lang, DEFAULT_STYLE_HINT)
+
+        return (
+            f"You are a professional manga translator, translating {src_name} manga dialogue into natural {tgt_name}.\n"
+            "Make it sound like real people speaking, not a literal translation.\n"
+            "Preserve emotion, personality, character voice, and intent.\n"
+            "Keep character names and proper nouns as-is (do not translate names).\n"
+            "Use short, conversational sentences that fit in speech bubbles.\n"
+            f"{style_hint}"
+            "Return only the translated dialogue, no commentary or extra text.\n\n"
+            f"Text:\n{text}"
+        )
+
+    @staticmethod
+    def _extract_text(data: dict) -> str:
+        candidates = data.get("candidates", [])
+        if not candidates:
+            return ""
+        content = candidates[0].get("content", {})
+        parts = content.get("parts", [])
+        if not parts:
+            return ""
+        return parts[0].get("text", "").strip()
+
+    @staticmethod
+    def _make_cache_key(text: str, source_lang: str, target_lang: str) -> str:
+        return f"{source_lang}:{target_lang}:{text}"
+
+    async def translate_one_async(
+        self,
+        session: "aiohttp.ClientSession",
+        text: str,
+        source_lang: str,
+        target_lang: str,
+        semaphore: asyncio.Semaphore,
+    ) -> str:
+        """Translate single text asynchronously."""
+        if not text or not text.strip():
+            return ""
+
+        # Check cache first
+        cache_key = self._make_cache_key(text, source_lang, target_lang)
+        if cache_key in self._cache:
+            return self._cache[cache_key]
+
+        async with semaphore:
+            prompt = self._build_prompt(text, source_lang, target_lang)
+            payload = {
+                "contents": [{"parts": [{"text": prompt}]}],
+                "generationConfig": {"temperature": 0.2, "maxOutputTokens": 512},
+            }
+            url = self._build_url()
+
+            try:
+                async with session.post(
+                    url,
+                    json=payload,
+                    timeout=aiohttp.ClientTimeout(total=self.timeout)
+                ) as response:
+                    if response.status == 200:
+                        data = await response.json()
+                        result = self._extract_text(data)
+                        if result:
+                            self._cache[cache_key] = result
+                        return result or text
+                    else:
+                        logger.warning(f"Gemini API error: {response.status}")
+                        return text
+            except asyncio.TimeoutError:
+                logger.warning(f"Translation timeout for: {text[:30]}...")
+                return text
+            except Exception as e:
+                logger.warning(f"Translation failed: {e}")
+                return text
+
+    async def translate_batch_async(
+        self,
+        texts: List[str],
+        source_lang: str,
+        target_lang: str,
+    ) -> List[str]:
+        """
+        Translate multiple texts concurrently.
+        Uses semaphore to limit concurrent requests.
+        """
+        if not AIOHTTP_AVAILABLE:
+            # Fallback to sync translator
+            sync_translator = MangaTranslator(
+                api_key=self.api_key,
+                model=self.model,
+                api_url=self.base_url,
+            )
+            return sync_translator.translate_batch(texts, source_lang, target_lang)
+
+        if not texts:
+            return []
+
+        semaphore = asyncio.Semaphore(self.max_concurrent)
+
+        async with aiohttp.ClientSession() as session:
+            tasks = [
+                self.translate_one_async(session, text, source_lang, target_lang, semaphore)
+                for text in texts
+            ]
+            results = await asyncio.gather(*tasks, return_exceptions=True)
+
+        # Handle any exceptions
+        final_results = []
+        for i, result in enumerate(results):
+            if isinstance(result, Exception):
+                logger.warning(f"Translation {i} failed: {result}")
+                final_results.append(texts[i])  # Return original on error
+            else:
+                final_results.append(result)
+
+        return final_results
+
+
+# Global async translator instance
+_async_translator: Optional[AsyncTranslator] = None
+
+
+def get_async_translator() -> AsyncTranslator:
+    """Get or create async translator singleton."""
+    global _async_translator
+    if _async_translator is None:
+        _async_translator = AsyncTranslator()
+    return _async_translator
+
+
+async def translate_batch_async(
+    texts: List[str],
+    source_lang: str,
+    target_lang: str,
+) -> List[str]:
+    """Convenience function for batch translation."""
+    translator = get_async_translator()
+    return await translator.translate_batch_async(texts, source_lang, target_lang)
